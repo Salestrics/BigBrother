@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>House of Strategy — A Social Survival Game</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Start / setup screen -->
+    <div id="setup-screen" class="screen active">
+      <header class="title-header">
+        <h1>House of Strategy</h1>
+        <p class="tagline">Outwit. Outplay. Outlast.</p>
+      </header>
+      <div class="setup-panel card">
+        <h2>Enter the House</h2>
+        <label for="player-name">Your Name</label>
+        <input type="text" id="player-name" maxlength="20" placeholder="Enter your name" value="You">
+
+        <label for="difficulty">Difficulty</label>
+        <select id="difficulty">
+          <option value="easy">Easy — Softer competition, forgiving house</option>
+          <option value="normal" selected>Normal — Balanced challenge</option>
+          <option value="hard">Hard — Ruthless strategists, slim margins</option>
+        </select>
+
+        <div class="setup-actions">
+          <button id="btn-new-game" class="btn btn-primary">Start New Game</button>
+          <button id="btn-load-game" class="btn btn-secondary" disabled>Continue Saved Game</button>
+        </div>
+      </div>
+      <p class="setup-hint">Survive weekly evictions, build alliances, win competitions, and become the last one standing.</p>
+    </div>
+
+    <!-- Main game screen -->
+    <div id="game-screen" class="screen">
+      <header class="game-header">
+        <div class="header-left">
+          <h1>House of Strategy</h1>
+          <div class="week-indicator">
+            <span id="week-day">Week 1 — Day 1</span>
+            <span id="phase-label" class="phase-badge">Social Phase</span>
+          </div>
+        </div>
+        <div class="header-right">
+          <button id="btn-save" class="btn btn-small">Save</button>
+          <button id="btn-menu" class="btn btn-small btn-ghost">Menu</button>
+        </div>
+      </header>
+
+      <main class="game-layout">
+        <!-- Left: story log -->
+        <section class="story-panel card">
+          <h2>House Feed</h2>
+          <div id="story-log" class="story-log" aria-live="polite"></div>
+        </section>
+
+        <!-- Right: stats & houseguests -->
+        <aside class="sidebar">
+          <section class="player-panel card">
+            <h2 id="player-name-display">You</h2>
+            <div id="player-stats" class="stats-grid"></div>
+            <div id="player-status" class="status-tags"></div>
+          </section>
+
+          <section class="houseguests-panel card">
+            <h2>Houseguests <span id="guest-count" class="count-badge"></span></h2>
+            <ul id="houseguest-list" class="houseguest-list"></ul>
+          </section>
+
+          <section class="alliance-panel card">
+            <h2>Alliances</h2>
+            <div id="alliance-overview"></div>
+          </section>
+        </aside>
+      </main>
+
+      <!-- Action area -->
+      <footer class="action-bar card">
+        <h2 id="action-prompt">What will you do?</h2>
+        <div id="action-buttons" class="action-buttons"></div>
+        <div id="action-detail" class="action-detail hidden"></div>
+      </footer>
+    </div>
+
+    <!-- End game screen -->
+    <div id="end-screen" class="screen">
+      <div class="end-panel card">
+        <h1 id="end-title">Game Over</h1>
+        <div id="end-summary" class="end-summary"></div>
+        <div class="setup-actions">
+          <button id="btn-play-again" class="btn btn-primary">Play Again</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
