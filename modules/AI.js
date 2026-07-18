@@ -224,6 +224,9 @@ export class AIController {
   /** AI chooses nomination targets when AI is HOH. */
   chooseNominations(hoh) {
     const others = this.state.getOthers(hoh);
+    if (others.length === 0) return [];
+    if (others.length === 1) return [others[0]];
+
     const sorted = [...others].sort((a, b) => {
       const scoreA = this._nominationScore(hoh, a);
       const scoreB = this._nominationScore(hoh, b);
@@ -231,8 +234,8 @@ export class AIController {
     });
 
     const first = sorted[0];
-    const second = sorted.find((c) => c.id !== first.id) || sorted[1];
-    return [first, second];
+    const second = sorted.find((c) => c.id !== first.id);
+    return second ? [first, second] : [first];
   }
 
   _nominationScore(hoh, target) {

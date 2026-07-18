@@ -97,6 +97,12 @@ class Game {
     this._exposeGlobals();
     this.ui.showGame();
     this.render();
+
+    if (this.state.gameOver) {
+      this.endGame();
+      return;
+    }
+
     this.runPhase();
     this.ui.showToast('Game loaded!');
   }
@@ -119,6 +125,18 @@ class Game {
       this._resetGame();
       this.ui.showSetup();
     }
+  }
+
+  /** If only two remain, resolve the winner instead of running eviction. */
+  _maybeEndAtFinalTwo() {
+    if (this.state.getActiveContestants().length <= 2) {
+      this.state.checkWinCondition(true);
+      if (this.state.gameOver) {
+        this.endGame();
+        return true;
+      }
+    }
+    return false;
   }
 
   _initSystems() {
@@ -261,6 +279,13 @@ class Game {
 
   executePlayerAction(actionId, targetId = null, extra = {}) {
     const result = this.playerActions.execute(actionId, targetId, extra);
+
+    if (!result.success && result.text) {
+      this.logAndRender([{ text: result.text, type: result.type || 'warning' }]);
+      this.runSocialPhase();
+      return;
+    }
+
     this.ui.hideActionDetail();
 
     if (result.endDay) {
@@ -271,6 +296,8 @@ class Game {
     if (result.text) {
       this.logAndRender([{ text: result.text, type: result.type || 'narrative' }]);
     }
+
+    this._exposeGlobals();
 
     if (this.state.actionsRemaining <= 0) {
       this.ui.setActionPrompt('No actions remaining. End the day.');
@@ -391,6 +418,8 @@ class Game {
   }
 
   _afterCompetition(winner) {
+    if (this._maybeEndAtFinalTwo()) return;
+
     this.state.phase = PHASES.NOMINATION;
     this.state.day = 7;
     this.render();
@@ -400,6 +429,8 @@ class Game {
   // ─── Nominations ───────────────────────────────────────────────────
 
   runNominationPhase() {
+    if (this._maybeEndAtFinalTwo()) return;
+
     const hoh = this.state.getActiveContestants().find((c) => c.isHOH);
 
     if (hoh?.isPlayer) {
@@ -575,6 +606,8 @@ class Game {
   // ─── Eviction ──────────────────────────────────────────────────────
 
   runEvictionPhase() {
+    if (this._maybeEndAtFinalTwo()) return;
+
     const player = this.state.getPlayer();
 
     if (!player.isNominated && !player.isHOH && !player.evicted) {
@@ -639,7 +672,7 @@ class Game {
       text: `Week ${this.state.week} is over. ${active} houseguests remain.`
     }]);
 
-    if (this.state.checkWinCondition()) {
+    if (this.state.checkWinCondition(true)) {
       this.endGame();
       return;
     }

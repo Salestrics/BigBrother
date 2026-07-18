@@ -37,7 +37,11 @@ export class EvictionSystem {
     let nominees;
 
     if (hoh.isPlayer && playerPicks && playerPicks.length === 2) {
-      nominees = playerPicks.map((id) => this.state.getContestant(id)).filter(Boolean);
+      nominees = playerPicks.map((pick) => {
+        if (typeof pick === 'string') return this.state.getContestant(pick);
+        if (pick?.id) return this.state.getContestant(pick.id) || pick;
+        return null;
+      }).filter(Boolean);
     } else if (hoh.isPlayer) {
       // Will be handled by player UI — return empty for now
       return { results, nominees: [], needsPlayerInput: true };
@@ -45,18 +49,30 @@ export class EvictionSystem {
       nominees = this.ai.chooseNominations(hoh);
     }
 
-    for (const n of nominees) {
-      n.isNominated = true;
+    if (!nominees || nominees.length === 0) {
+      results.push({ type: 'system', text: 'No nominees could be selected.' });
+      return { results, nominees: [] };
     }
-    this.state.nominees = nominees.map((n) => n.id);
+
+    if (nominees.length < 2) {
+      results.push({
+        type: 'system',
+        text: 'Not enough houseguests remain for a standard nomination ceremony.'
+      });
+      nominees[0].isNominated = true;
+      this.state.nominees = nominees.map((n) => n.id);
+      return { results, nominees };
+    }
 
     for (const n of nominees) {
+      n.isNominated = true;
       results.push({
         type: 'drama',
         text: `${hoh.name} nominates <strong>${n.name}</strong> for eviction.`
       });
       n.threat = clamp(n.threat - 5, 0, 100);
     }
+    this.state.nominees = nominees.map((n) => n.id);
 
     this.state.addHistory({ type: 'nominations', hoh: hoh.id, nominees: this.state.nominees });
     return { results, nominees };
@@ -88,6 +104,10 @@ export class EvictionSystem {
       type: 'competition',
       text: '<strong>Power of Veto</strong> — Six players compete for the power to save a nominee.'
     });
+
+    for (const c of this.state.getActiveContestants()) {
+      c.hasVeto = false;
+    }
 
     // Determine veto winner
     let vetoWinner;

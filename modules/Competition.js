@@ -166,6 +166,10 @@ export class CompetitionManager {
       winner = this._resolveTiebreaker(tied, comp);
     }
 
+    for (const c of contestants) {
+      c.isHOH = false;
+    }
+
     this.state.competitionWinner = winner;
     winner.isHOH = true;
     this.state.currentHOH = winner;
