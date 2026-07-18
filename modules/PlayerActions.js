@@ -19,12 +19,20 @@ export class PlayerActions {
       { id: 'alliance', label: 'Propose Alliance', description: 'Invite someone into a secret alliance.' },
       { id: 'spy', label: 'Spy / Gather Intel', description: 'Eavesdrop and learn house secrets.' },
       { id: 'promise', label: 'Make a Promise', description: 'Pledge your vote or loyalty.' },
-      { id: 'break_promise', label: 'Break a Promise', description: 'Go back on your word (risky).' },
       { id: 'campaign', label: 'Campaign Against Target', description: 'Turn the house against someone.' },
       { id: 'influence', label: 'Influence Votes', description: 'Lobby houseguests before eviction.' },
       { id: 'reputation', label: 'Improve Reputation', description: 'Do something to look good to the house.' },
       { id: 'rest', label: 'Rest & Observe', description: 'Skip action, lower threat slightly.' }
     ];
+
+    const hasActivePromises = player.promises.some((p) => p.kept === null);
+    if (hasActivePromises) {
+      actions.splice(5, 0, {
+        id: 'break_promise',
+        label: 'Break a Promise',
+        description: 'Go back on your word (risky).'
+      });
+    }
 
     if (this.state.actionsRemaining <= 0) {
       return [{ id: 'end_day', label: 'End Day', description: 'Move on to the next day.' }];
@@ -215,6 +223,11 @@ export class PlayerActions {
 
   _breakPromise(player, target) {
     if (!target) return { success: false, text: 'Choose whose promise to break.', type: 'system' };
+
+    const activePromise = player.promises.find((p) => p.targetId === target.id && p.kept === null);
+    if (!activePromise) {
+      return { success: false, text: `You have no active promise to ${target.name}.`, type: 'system' };
+    }
 
     player.breakPromise(target.id);
     target.recordBetrayal(player.id, this.state.week);

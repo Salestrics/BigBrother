@@ -52,6 +52,8 @@ export class GameState {
     this.evictedThisWeek = null;
     this.competitionWinner = null;
     this.lastCompetitionType = null;
+    this.currentCompetition = null;
+    this.challengeData = null;
     this.playerIntel = []; // secrets player has learned
     this.gameOver = false;
     this.winner = null;
@@ -199,15 +201,14 @@ export class GameState {
     this.resetWeeklyFlags();
   }
 
-  checkWinCondition() {
+  checkWinCondition(allowFinalTwo = true) {
     const active = this.getActiveContestants();
     if (active.length === 1) {
       this.gameOver = true;
       this.winner = active[0];
       return true;
     }
-    if (active.length === 2) {
-      // Final two — jury-less instant win based on competition + social
+    if (allowFinalTwo && active.length === 2) {
       const [a, b] = active;
       const scoreA = a.competition * 2 + a.social + a.reputation / 10;
       const scoreB = b.competition * 2 + b.social + b.reputation / 10;
@@ -237,6 +238,8 @@ export class GameState {
       evictedThisWeek: this.evictedThisWeek,
       competitionWinner: this.competitionWinner?.id ?? this.competitionWinner,
       lastCompetitionType: this.lastCompetitionType,
+      currentCompetition: this.currentCompetition,
+      challengeData: this.challengeData,
       playerIntel: this.playerIntel,
       gameOver: this.gameOver,
       winner: this.winner ? this.winner.id : null
@@ -268,6 +271,8 @@ export class GameState {
       ? state.contestants.find((c) => c.id === data.competitionWinner) || null
       : null;
     state.lastCompetitionType = data.lastCompetitionType;
+    state.currentCompetition = data.currentCompetition || null;
+    state.challengeData = data.challengeData || null;
     state.playerIntel = data.playerIntel;
     state.gameOver = data.gameOver;
     state.winner = data.winner ? state.contestants.find((c) => c.id === data.winner) : null;

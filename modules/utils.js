@@ -134,6 +134,15 @@ export function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
+/** Escape HTML entities for safe insertion into innerHTML. */
+export function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 /** Pick unique names for AI contestants. */
 export function generateAINames(count) {
   return pickN(FIRST_NAMES, count);

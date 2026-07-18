@@ -1,5 +1,5 @@
 import { PHASE_LABELS, PHASES } from './GameState.js';
-import { relationshipClass, formatRelationship } from './utils.js';
+import { relationshipClass, formatRelationship, escapeHtml } from './utils.js';
 
 /**
  * DOM rendering and screen management.
@@ -130,8 +130,8 @@ export class UIManager {
 
       return `<li class="houseguest-item ${c.isPlayer ? 'is-player' : ''} ${c.evicted ? 'evicted' : ''}">
         <div>
-          <span class="name">${icons.join(' ')} ${c.name}</span>
-          <div class="personality">${c.personality.name}</div>
+          <span class="name">${icons.join(' ')} ${escapeHtml(c.name)}</span>
+          <div class="personality">${escapeHtml(c.personality.name)}</div>
         </div>
         ${relDisplay}
       </li>`;
@@ -189,9 +189,10 @@ export class UIManager {
 
   buildTargetPicker(contestants, label, onSelect, excludeIds = []) {
     const targets = contestants.filter((c) => !c.evicted && !c.isPlayer && !excludeIds.includes(c.id));
-    let html = `<p>${label}</p><div class="target-grid">`;
+    let html = `<p>${escapeHtml(label)}</p><div class="target-grid">`;
     for (const t of targets) {
-      html += `<button class="btn target-btn" data-target="${t.id}">${t.name} (${formatRelationship(window.__gamePlayer?.getRelationship(t.id) || 0)})</button>`;
+      const rel = formatRelationship(window.__gamePlayer?.getRelationship(t.id) || 0);
+      html += `<button class="btn target-btn" data-target="${t.id}">${escapeHtml(t.name)} (${rel})</button>`;
     }
     html += '</div>';
     return { html, targets };

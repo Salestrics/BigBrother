@@ -62,18 +62,10 @@ export class EvictionSystem {
     return { results, nominees };
   }
 
-  /** Veto competition / power event. */
-  runVetoEvent(playerWonVeto = false) {
-    const results = [];
+  /** Get veto players without resolving the competition. */
+  getVetoSetup() {
     const contestants = this.state.getActiveContestants();
     const nominees = this.state.nominees.map((id) => this.state.getContestant(id)).filter(Boolean);
-
-    results.push({
-      type: 'competition',
-      text: '<strong>Power of Veto</strong> — Six players compete for the power to save a nominee.'
-    });
-
-    // Select veto players: nominees + HOH + random picks
     const hoh = this._getHOH();
     const vetoPlayers = [...nominees];
     if (hoh && !vetoPlayers.some((p) => p.id === hoh.id)) vetoPlayers.push(hoh);
@@ -82,6 +74,20 @@ export class EvictionSystem {
       if (extra) vetoPlayers.push(extra);
       else break;
     }
+    const player = this.state.getPlayer();
+    return { vetoPlayers, playerInComp: vetoPlayers.some((p) => p.id === player.id) };
+  }
+
+  /** Veto competition / power event. */
+  runVetoEvent(playerWonVeto = false) {
+    const results = [];
+    const { vetoPlayers } = this.getVetoSetup();
+    const nominees = this.state.nominees.map((id) => this.state.getContestant(id)).filter(Boolean);
+
+    results.push({
+      type: 'competition',
+      text: '<strong>Power of Veto</strong> — Six players compete for the power to save a nominee.'
+    });
 
     // Determine veto winner
     let vetoWinner;
@@ -179,10 +185,10 @@ export class EvictionSystem {
     if (replacement) {
       replacement.isNominated = true;
       this.state.nominees.push(replacement.id);
-      const hoh = this.state.getPlayer();
+      const hoh = this._getHOH();
       results.push({
         type: 'drama',
-        text: `${hoh.name} nominates <strong>${replacement.name}</strong> as the replacement.`
+        text: `${hoh?.name || 'The HOH'} nominates <strong>${replacement.name}</strong> as the replacement.`
       });
     }
     return results;
@@ -198,38 +204,36 @@ export class EvictionSystem {
       return { results, evicted: null };
     }
 
+    for (const n of nominees) {
+      n.votesReceived = 0;
+    }
+
     results.push({
       type: 'drama',
       text: '<strong>Eviction Night</strong> — The houseguests cast their votes to evict.'
     });
 
-    const voters = this.state.getActiveContestants().filter((c) => !c.isNominated);
+    const hoh = this._getHOH();
+    const voters = this.state.getActiveContestants().filter(
+      (c) => !c.isNominated && c.id !== hoh?.id
+    );
     const voteLog = [];
 
     for (const voter of voters) {
-      let vote;
-      if (voter.isPlayer && playerVoteTarget) {
-        vote = this.state.getContestant(playerVoteTarget);
-      } else if (voter.isPlayer) {
-        continue; // Player vote handled separately
-      } else {
-        const decision = this.ai.decideVote(voter, nominees);
-        vote = decision.target;
-        voteLog.push({
-          voter: voter.name,
-          target: vote.name,
-          reason: decision.reason
-        });
-      }
+      if (voter.isPlayer) continue;
 
-      if (vote) {
-        vote.votesReceived += 1;
-      }
+      const decision = this.ai.decideVote(voter, nominees);
+      decision.target.votesReceived += 1;
+      voteLog.push({
+        voter: voter.name,
+        target: decision.target.name,
+        reason: decision.reason
+      });
     }
 
-    // Player vote
+    // Player vote (HOH does not vote)
     const player = this.state.getPlayer();
-    if (!player.isNominated && playerVoteTarget) {
+    if (!player.isNominated && !player.isHOH && playerVoteTarget) {
       const vote = this.state.getContestant(playerVoteTarget);
       if (vote) {
         vote.votesReceived += 1;
@@ -257,9 +261,16 @@ export class EvictionSystem {
     }
 
     const tied = nominees.filter((n) => n.votesReceived === evicted.votesReceived);
-    if (tied.length > 1) {
+    if (tied.length > 1 && hoh) {
+      const decision = this.ai.decideVote(hoh, tied);
+      evicted = decision.target;
+      results.push({
+        type: 'warning',
+        text: `It's a tie! ${hoh.name} breaks the tie and evicts <strong>${evicted.name}</strong>.`
+      });
+    } else if (tied.length > 1) {
       evicted = tied[Math.floor(Math.random() * tied.length)];
-      results.push({ type: 'warning', text: 'It\'s a tie! The HOH breaks the tie.' });
+      results.push({ type: 'warning', text: 'It\'s a tie! A random draw decides the evictee.' });
     }
 
     evicted.evicted = true;
@@ -290,6 +301,6 @@ export class EvictionSystem {
     this.state.addHistory({ type: 'eviction', evicted: evicted.id, votes: voteLog });
     this.state.updateThreatLevels();
 
-    return { results, evicted, voteLog, needsPlayerVote: !player.isNominated && !playerVoteTarget };
+    return { results, evicted, voteLog, needsPlayerVote: !player.isNominated && !player.isHOH && !playerVoteTarget };
   }
 }

@@ -85,8 +85,9 @@ export class AIController {
       }
       case 'gather_intel': {
         const target = pickRandom(others);
-        if (!target.secretsKnown.includes(`campaigning_week${this.state.week}`)) {
-          target.secretsKnown.push(`campaigning_week${this.state.week}`);
+        const secret = `overheard_${target.id}_week${this.state.week}`;
+        if (!ai.secretsKnown.includes(secret)) {
+          ai.secretsKnown.push(secret);
         }
         return {
           type: 'narrative',
@@ -134,6 +135,7 @@ export class AIController {
         };
       }
       case 'train': {
+        ai.competition = clamp(ai.competition + 1, 1, 10);
         return {
           type: 'narrative',
           text: `${ai.name} was up early training for the next competition.`
@@ -161,7 +163,9 @@ export class AIController {
     const ais = this.state.getActiveContestants().filter((c) => !c.isPlayer && !c.allianceId);
     if (ais.length < 2) return null;
 
-    const leader = pickRandom(ais.filter((a) => ['strategist', 'loyalist', 'social'].includes(a.personality.id)) || ais);
+    const strategists = ais.filter((a) => ['strategist', 'loyalist', 'social'].includes(a.personality.id));
+    const leaderPool = strategists.length > 0 ? strategists : ais;
+    const leader = pickRandom(leaderPool);
     if (!leader) return null;
 
     const candidates = this.state.getOthers(leader).filter((c) => !c.allianceId && !c.isPlayer);
@@ -188,15 +192,17 @@ export class AIController {
     if (alliances.length === 0) return null;
 
     const alliance = pickRandom(alliances);
-    const betrayer = this.state.getContestant(alliance.leaderId);
-    if (!betrayer || betrayer.isPlayer) {
-      const members = alliance.members.map((id) => this.state.getContestant(id)).filter(Boolean);
-      const aiMembers = members.filter((m) => !m.isPlayer);
-      if (aiMembers.length === 0) return null;
-      const b = pickRandom(aiMembers);
-      return this._executeBetrayal(b, alliance);
-    }
-    return null;
+    const members = alliance.members.map((id) => this.state.getContestant(id)).filter(Boolean);
+    const aiMembers = members.filter((m) => !m.isPlayer);
+    if (aiMembers.length < 2) return null;
+
+    const leader = this.state.getContestant(alliance.leaderId);
+    const betrayerCandidates = aiMembers.filter((m) => m.id !== leader?.id);
+    const betrayer = betrayerCandidates.length > 0
+      ? pickRandom(betrayerCandidates)
+      : pickRandom(aiMembers);
+
+    return this._executeBetrayal(betrayer, alliance);
   }
 
   _executeBetrayal(betrayer, alliance) {
@@ -289,9 +295,25 @@ export class AIController {
         reasons.push(`${nominee.name} is too aggressive`);
       }
 
-      // Strategists vote with house majority
+      // Honor or punish broken promises
+      const promiseToNominee = voter.promises.find(
+        (p) => p.targetId === nominee.id && p.kept === null
+      );
+      if (promiseToNominee) {
+        score -= 20;
+        reasons.push(`promised safety to ${nominee.name}`);
+      }
+      const brokenByNominee = nominee.promises.find(
+        (p) => p.targetId === voter.id && p.kept === false
+      );
+      if (brokenByNominee) {
+        score += 15;
+        reasons.push(`${nominee.name} broke a promise`);
+      }
+
+      // Strategists target bigger threats rather than bandwagoning
       if (voter.personality.strategy === 'manipulate') {
-        score += nominee.votesReceived * 3;
+        score += nominee.threat / 4;
       }
 
       if (score > bestScore) {

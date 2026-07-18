@@ -1,4 +1,4 @@
-import { statCheck, randomInt, pickRandom, clamp, compareStats } from './utils.js';
+import { statCheck, randomInt, pickRandom, clamp } from './utils.js';
 
 /**
  * Text-based competitions with stat-based outcomes and player choices.
@@ -45,8 +45,10 @@ export const COMPETITION_TYPES = [
 const TRIVIA_QUESTIONS = [
   { q: 'Which continent has the most countries?', choices: ['Africa', 'Europe', 'Asia', 'South America'], answer: 0 },
   { q: 'What year did the first reality competition show air?', choices: ['1992', '2000', '1988', '1997'], answer: 1 },
-  { q: 'How many weeks has this season been running?', choices: ['Too many', 'Not enough', 'Just right', 'Who cares'], answer: 2 },
-  { q: 'Which strategy wins most often?', choices: ['Aggression', 'Social bonds', 'Pure luck', 'Doing nothing'], answer: 1 }
+  { q: 'How many houseguests started this game?', choices: ['8', '10', '11', '12'], answer: 2 },
+  { q: 'Which strategy wins most often?', choices: ['Aggression', 'Social bonds', 'Pure luck', 'Doing nothing'], answer: 1 },
+  { q: 'What wins Big Brother most often?', choices: ['Aggression', 'Social game', 'Luck', 'Doing nothing'], answer: 1 },
+  { q: 'When should you win HOH?', choices: ['Always', 'When threatened', 'Never', 'Week 1 only'], answer: 1 }
 ];
 
 const LOGIC_PUZZLES = [
@@ -59,6 +61,11 @@ const LOGIC_PUZZLES = [
     q: 'Nominees A and B. A has 3 allies, B has 1. Who is safer at eviction?',
     choices: ['Nominee A', 'Nominee B', 'Both equally', 'Neither'],
     scores: [1, 4, 2, 3]
+  },
+  {
+    q: 'Three houseguests: one lies, one tells truth, one alternates. Who do you trust?',
+    choices: ['The quiet one', 'The ally', 'The beast', 'Trust no one'],
+    scores: [2, 4, 1, 3]
   }
 ];
 
@@ -66,41 +73,76 @@ export class CompetitionManager {
   constructor(gameState) {
     this.state = gameState;
     this.currentCompetition = null;
-    this.playerChoices = [];
+    this.challengeData = null;
   }
 
   /** Select and start a random competition for the week. */
   startCompetition() {
-    this.currentCompetition = pickRandom(COMPETITION_TYPES);
-    this.state.lastCompetitionType = this.currentCompetition.id;
-    this.playerChoices = [];
+    if (!this.currentCompetition) {
+      this.currentCompetition = pickRandom(COMPETITION_TYPES);
+      this.state.lastCompetitionType = this.currentCompetition.id;
+    }
     return this.currentCompetition;
   }
 
-  /** Run full competition and return { winner, narrative[], playerParticipated }. */
-  runCompetition(playerChoiceCallback = null) {
+  /** Restore competition state after load. */
+  restoreCompetition(comp, challengeData) {
+    if (comp) {
+      this.currentCompetition = COMPETITION_TYPES.find((c) => c.id === comp.id) || comp;
+    }
+    this.challengeData = challengeData || null;
+  }
+
+  /** Generate challenge payload once — shared by UI and scoring. */
+  createChallengeData(comp = this.currentCompetition) {
+    switch (comp.id) {
+      case 'trivia':
+        return { type: 'trivia', data: pickRandom(TRIVIA_QUESTIONS) };
+      case 'memory':
+        return { type: 'memory', data: Array.from({ length: 5 }, () => randomInt(1, 4)).join('-') };
+      case 'logic':
+        return { type: 'logic', data: pickRandom(LOGIC_PUZZLES) };
+      case 'endurance':
+        return { type: 'endurance', data: 3 };
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Run full competition.
+   * @param {object|null} challengeData - Pre-generated challenge (required for player-interactive comps)
+   * @param {*} playerChoice - Player's answer from the UI
+   * @param {boolean} skipIntro - Skip duplicate intro line when already logged
+   */
+  runCompetition(challengeData = null, playerChoice = null, skipIntro = false) {
     const comp = this.currentCompetition || this.startCompetition();
     const contestants = this.state.getActiveContestants();
     const results = [];
     const scores = new Map();
 
-    results.push({
-      type: 'competition',
-      text: `<strong>${comp.name}</strong> — ${comp.description}`
-    });
+    if (!skipIntro) {
+      results.push({
+        type: 'competition',
+        text: `<strong>${comp.name}</strong> — ${comp.description}`
+      });
+    }
+
+    const resolvedChallenge = challengeData || this.challengeData || this.createChallengeData(comp);
+    this.challengeData = resolvedChallenge;
 
     switch (comp.id) {
       case 'trivia':
-        this._runTrivia(contestants, scores, results, playerChoiceCallback);
+        this._runTrivia(contestants, scores, results, resolvedChallenge, playerChoice);
         break;
       case 'memory':
-        this._runMemory(contestants, scores, results, playerChoiceCallback);
+        this._runMemory(contestants, scores, results, resolvedChallenge, playerChoice);
         break;
       case 'logic':
-        this._runLogic(contestants, scores, results, playerChoiceCallback);
+        this._runLogic(contestants, scores, results, resolvedChallenge, playerChoice);
         break;
       case 'endurance':
-        this._runEndurance(contestants, scores, results, playerChoiceCallback);
+        this._runEndurance(contestants, scores, results, resolvedChallenge, playerChoice);
         break;
       case 'luck':
         this._runLuck(contestants, scores, results);
@@ -109,7 +151,6 @@ export class CompetitionManager {
         this._runGeneric(contestants, scores, comp);
     }
 
-    // Determine winner from scores
     let winner = contestants[0];
     let bestScore = -Infinity;
     for (const c of contestants) {
@@ -120,15 +161,15 @@ export class CompetitionManager {
       }
     }
 
-    // Tiebreaker
     const tied = contestants.filter((c) => scores.get(c.id) === bestScore);
     if (tied.length > 1) {
-      winner = compareStats(tied[0], comp.primaryStat, tied[1], comp.primaryStat);
+      winner = this._resolveTiebreaker(tied, comp);
     }
 
     this.state.competitionWinner = winner;
     winner.isHOH = true;
     this.state.currentHOH = winner;
+    this.challengeData = null;
 
     results.push({
       type: 'success',
@@ -136,6 +177,17 @@ export class CompetitionManager {
     });
 
     return { winner, results, competition: comp };
+  }
+
+  _resolveTiebreaker(tied, comp) {
+    let winner = tied[0];
+    for (let i = 1; i < tied.length; i += 1) {
+      const challenger = tied[i];
+      const wScore = winner[comp.primaryStat] + randomInt(-1, 2);
+      const cScore = challenger[comp.primaryStat] + randomInt(-1, 2);
+      if (cScore > wScore) winner = challenger;
+    }
+    return winner;
   }
 
   _baseScore(contestant, comp) {
@@ -146,18 +198,18 @@ export class CompetitionManager {
     return primary * 3 + secondary + randomInt(-2, 4) + playerBonus;
   }
 
-  _runTrivia(contestants, scores, results, playerChoiceCallback) {
-    const questions = pickRandom(TRIVIA_QUESTIONS);
+  _runTrivia(contestants, scores, results, challenge, playerChoice) {
+    const question = challenge.data;
+    results.push({ type: 'competition', text: `Question: "${question.q}"` });
+
     for (const c of contestants) {
       let score = this._baseScore(c, this.currentCompetition);
-      if (c.isPlayer && playerChoiceCallback) {
-        const correct = playerChoiceCallback('trivia', questions);
+      if (c.isPlayer && playerChoice !== null) {
+        const correct = playerChoice === question.answer;
         score += correct ? 15 : -5;
         results.push({
           type: 'competition',
-          text: correct
-            ? 'You nailed the trivia question!'
-            : 'You whiffed on the trivia question.'
+          text: correct ? 'You nailed the trivia question!' : 'You whiffed on the trivia question.'
         });
       } else {
         const correct = statCheck(c.intelligence, 5);
@@ -165,21 +217,16 @@ export class CompetitionManager {
       }
       scores.set(c.id, score);
     }
-    results.push({
-      type: 'competition',
-      text: `Question: "${questions.q}"`
-    });
   }
 
-  _runMemory(contestants, scores, results, playerChoiceCallback) {
-    const sequence = Array.from({ length: 5 }, () => randomInt(1, 4)).join('-');
+  _runMemory(contestants, scores, results, challenge, playerChoice) {
+    const sequence = challenge.data;
     results.push({ type: 'competition', text: `Memorize this sequence: ${sequence}` });
 
     for (const c of contestants) {
       let score = this._baseScore(c, this.currentCompetition);
-      if (c.isPlayer && playerChoiceCallback) {
-        const playerSeq = playerChoiceCallback('memory', sequence);
-        const match = playerSeq === sequence;
+      if (c.isPlayer && playerChoice !== null) {
+        const match = playerChoice === sequence;
         score += match ? 20 : randomInt(-8, 2);
         results.push({
           type: 'competition',
@@ -193,15 +240,14 @@ export class CompetitionManager {
     }
   }
 
-  _runLogic(contestants, scores, results, playerChoiceCallback) {
-    const puzzle = pickRandom(LOGIC_PUZZLES);
+  _runLogic(contestants, scores, results, challenge, playerChoice) {
+    const puzzle = challenge.data;
     results.push({ type: 'competition', text: puzzle.q });
 
     for (const c of contestants) {
       let score = this._baseScore(c, this.currentCompetition);
-      if (c.isPlayer && playerChoiceCallback) {
-        const choiceIdx = playerChoiceCallback('logic', puzzle);
-        score += (puzzle.scores[choiceIdx] || 0) * 3;
+      if (c.isPlayer && playerChoice !== null) {
+        score += (puzzle.scores[playerChoice] || 0) * 3;
       } else {
         const best = Math.max(...puzzle.scores);
         const aiScore = statCheck(c.intelligence, 6) ? best : pickRandom(puzzle.scores);
@@ -211,10 +257,10 @@ export class CompetitionManager {
     }
   }
 
-  _runEndurance(contestants, scores, results, playerChoiceCallback) {
+  _runEndurance(contestants, scores, results, challenge, playerChoice) {
     results.push({ type: 'competition', text: 'Hold steady! Distractions are coming...' });
+    const rounds = challenge.data;
 
-    const rounds = 3;
     for (let round = 1; round <= rounds; round += 1) {
       const distractions = ['cold water', 'temptation food', 'verbal taunts', 'fake eviction news'];
       results.push({
@@ -225,8 +271,8 @@ export class CompetitionManager {
 
     for (const c of contestants) {
       let score = this._baseScore(c, this.currentCompetition);
-      if (c.isPlayer && playerChoiceCallback) {
-        const held = playerChoiceCallback('endurance', rounds);
+      if (c.isPlayer && playerChoice !== null) {
+        const held = playerChoice === true;
         score += held ? 25 : randomInt(5, 12);
         results.push({
           type: 'competition',
@@ -265,19 +311,26 @@ export class CompetitionManager {
     }
   }
 
+  /** Resolve a veto mini-competition for the player. */
+  resolveVetoCompetition(playerHeldStrong) {
+    const player = this.state.getPlayer();
+    const base = player.competition + randomInt(-1, 3);
+    return playerHeldStrong && base >= 6;
+  }
+
   /** Player competition helpers — return choice UI data. */
   getPlayerChallengeData(type, data) {
     switch (type) {
       case 'trivia':
         return {
           prompt: data.q,
-          choices: data.choices.map((c, i) => ({ label: c, value: i, correct: i === data.answer }))
+          choices: data.choices.map((c, i) => ({ label: c, value: i }))
         };
       case 'memory':
         return {
           prompt: `Memorize: ${data}`,
           choices: [
-            { label: 'I remember it!', value: data, action: 'input' },
+            { label: 'I remember it!', value: data },
             { label: 'Guess: 1-2-3-4-1', value: '1-2-3-4-1' },
             { label: 'Guess: 2-4-1-3-2', value: '2-4-1-3-2' },
             { label: 'Guess: 3-1-4-2-3', value: '3-1-4-2-3' }

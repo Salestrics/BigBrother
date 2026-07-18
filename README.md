@@ -15,7 +15,7 @@ Then visit `http://localhost:8080`.
 ## How to Play
 
 1. Enter your name and choose a difficulty level.
-2. Each week has five social days where you can talk, befriend, spy, campaign, and form alliances.
+2. Each week has five social days (Days 1–5) where you can talk, befriend, spy, campaign, and form alliances.
 3. Day 6 is the Head of Household competition — win to control nominations.
 4. Day 7 brings nominations, the Power of Veto, and the eviction vote.
 5. Survive until you're the last houseguest standing.

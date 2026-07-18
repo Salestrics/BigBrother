@@ -3,15 +3,15 @@
  * Orchestrates the weekly loop: social → competition → nominations → veto → eviction.
  */
 
-import { GameState, PHASES, PHASE_LABELS } from './modules/GameState.js';
+import { GameState, PHASES } from './modules/GameState.js';
 import { AIController } from './modules/AI.js';
-import { CompetitionManager, COMPETITION_TYPES } from './modules/Competition.js';
+import { CompetitionManager } from './modules/Competition.js';
 import { NarrativeEngine } from './modules/Events.js';
 import { EvictionSystem } from './modules/Eviction.js';
 import { PlayerActions } from './modules/PlayerActions.js';
 import { UIManager, setStorageRef } from './modules/UI.js';
 import { StorageManager } from './modules/Storage.js';
-import { pickRandom, randomInt } from './modules/utils.js';
+import { escapeHtml } from './modules/utils.js';
 
 class Game {
   constructor() {
@@ -22,12 +22,8 @@ class Game {
     this.narrative = null;
     this.eviction = null;
     this.playerActions = null;
-
-    // Pending player input state
     this.pendingAction = null;
-    this.pendingCompetition = null;
-    this.competitionData = null;
-    this.playerChoiceResolver = null;
+    this.pendingChallenge = null;
 
     setStorageRef(StorageManager);
     this._bindSetupEvents();
@@ -46,19 +42,35 @@ class Game {
     ui.elements.btnSave.addEventListener('click', () => this.saveGame());
     ui.elements.btnMenu.addEventListener('click', () => this.returnToMenu());
     ui.elements.btnPlayAgain.addEventListener('click', () => {
+      this._resetGame();
       ui.showSetup();
     });
 
     ui.showSetup();
   }
 
+  _resetGame() {
+    this.state = null;
+    this.ai = null;
+    this.competition = null;
+    this.narrative = null;
+    this.eviction = null;
+    this.playerActions = null;
+    this.pendingAction = null;
+    this.pendingChallenge = null;
+    window.__gameContestants = null;
+    window.__gamePlayer = null;
+  }
+
   startNewGame(playerName, difficulty) {
+    this._resetGame();
     this.state = new GameState({ playerName, difficulty, aiCount: 10 });
     this._initSystems();
     this._exposeGlobals();
 
+    const safeName = escapeHtml(playerName);
     this.state.addStory({
-      text: `Welcome to the House, <strong>${playerName}</strong>! ${this.state.getActiveContestants().length} houseguests are competing. Only one will win.`,
+      text: `Welcome to the House, <strong>${safeName}</strong>! ${this.state.getActiveContestants().length} houseguests are competing. Only one will win.`,
       type: 'success'
     });
     this.state.addStory({
@@ -78,8 +90,10 @@ class Game {
       return;
     }
 
+    this._resetGame();
     this.state = GameState.fromJSON(data);
     this._initSystems();
+    this.competition.restoreCompetition(data.currentCompetition, data.challengeData);
     this._exposeGlobals();
     this.ui.showGame();
     this.render();
@@ -89,6 +103,10 @@ class Game {
 
   saveGame() {
     if (!this.state) return;
+    if (this.competition) {
+      this.state.currentCompetition = this.competition.currentCompetition;
+      this.state.challengeData = this.competition.challengeData;
+    }
     if (StorageManager.save(this.state)) {
       this.ui.showToast('Game saved!');
     } else {
@@ -98,6 +116,7 @@ class Game {
 
   returnToMenu() {
     if (confirm('Return to menu? Unsaved progress will be lost.')) {
+      this._resetGame();
       this.ui.showSetup();
     }
   }
@@ -137,8 +156,6 @@ class Game {
     this.ui.addStoryEntries(entries);
     this.render();
   }
-
-  // ─── Phase orchestration ───────────────────────────────────────────
 
   runPhase() {
     if (this.state.gameOver) {
@@ -197,11 +214,25 @@ class Game {
 
     if (needsTarget) {
       this.pendingAction = action;
-      const { html } = this.ui.buildTargetPicker(
-        this.state.contestants,
-        `Choose a target for: ${action.label}`,
-        null
-      );
+      let html;
+
+      if (action.id === 'break_promise') {
+        const promiseTargets = this.state.getPlayer().promises
+          .filter((p) => p.kept === null)
+          .map((p) => this.state.getContestant(p.targetId))
+          .filter(Boolean);
+        html = '<p>Choose whose promise to break:</p><div class="target-grid">';
+        for (const t of promiseTargets) {
+          html += `<button class="btn target-btn" data-target="${t.id}">${escapeHtml(t.name)}</button>`;
+        }
+        html += '</div>';
+      } else {
+        const picker = this.ui.buildTargetPicker(
+          this.state.contestants,
+          `Choose a target for: ${action.label}`
+        );
+        html = picker.html;
+      }
 
       this.ui.showActionDetail(
         html + '<button class="btn btn-ghost" data-cancel>Cancel</button>',
@@ -210,13 +241,18 @@ class Game {
 
       this.ui.elements.actionDetail.querySelectorAll('[data-target]').forEach((btn) => {
         btn.addEventListener('click', () => {
-          const targetId = btn.dataset.target;
-          this.executePlayerAction(action.id, targetId);
+          this.pendingAction = null;
+          this.executePlayerAction(action.id, btn.dataset.target);
         });
       });
 
       const cancel = this.ui.elements.actionDetail.querySelector('[data-cancel]');
-      if (cancel) cancel.addEventListener('click', () => this.ui.hideActionDetail());
+      if (cancel) {
+        cancel.addEventListener('click', () => {
+          this.pendingAction = null;
+          this.ui.hideActionDetail();
+        });
+      }
       return;
     }
 
@@ -250,13 +286,11 @@ class Game {
   advanceDay() {
     this.ui.hideActionDetail();
 
-    // AI background activity
     const aiEvents = this.ai.runSocialPhase();
     if (aiEvents.length > 0) {
       this.logAndRender(aiEvents);
     }
 
-    // Random narrative event
     const event = this.narrative.generateDailyEvent();
     if (event) {
       this.logAndRender([event]);
@@ -267,9 +301,10 @@ class Game {
 
     if (this.state.day > this.state.maxDaysPerWeek) {
       this.state.phase = PHASES.COMPETITION;
+      this.state.day = 6;
       this.logAndRender([{
         type: 'system',
-        text: `Day ${this.state.maxDaysPerWeek} ends. Competition day has arrived!`
+        text: 'Competition day has arrived!'
       }]);
       this.render();
       setTimeout(() => this.runPhase(), 800);
@@ -300,60 +335,27 @@ class Game {
       return;
     }
 
-    // Player-interactive competitions
     if (['trivia', 'memory', 'logic', 'endurance'].includes(comp.id)) {
-      this._startPlayerCompetition(comp);
+      this.pendingChallenge = this.competition.challengeData
+        || this.competition.createChallengeData(comp);
+      this.competition.challengeData = this.pendingChallenge;
+      this._startPlayerCompetition(comp, this.pendingChallenge);
     } else {
       this._resolveCompetitionAI();
     }
   }
 
-  _startPlayerCompetition(comp) {
-    let challengeData;
-    switch (comp.id) {
-      case 'trivia': {
-        const questions = [
-          { q: 'Which continent has the most countries?', choices: ['Africa', 'Europe', 'Asia', 'South America'], answer: 0 },
-          { q: 'What wins Big Brother most often?', choices: ['Aggression', 'Social game', 'Luck', 'Doing nothing'], answer: 1 },
-          { q: 'How many houseguests started this game?', choices: ['8', '10', '11', '12'], answer: 2 },
-          { q: 'When should you win HOH?', choices: ['Always', 'When threatened', 'Never', 'Week 1 only'], answer: 1 }
-        ];
-        challengeData = this.competition.getPlayerChallengeData('trivia', pickRandom(questions));
-        this.competitionData = pickRandom(questions);
-        break;
-      }
-      case 'memory': {
-        const seq = Array.from({ length: 5 }, () => randomInt(1, 4)).join('-');
-        challengeData = this.competition.getPlayerChallengeData('memory', seq);
-        this.competitionData = seq;
-        break;
-      }
-      case 'logic': {
-        const puzzles = [
-          { q: 'Three houseguests: one lies, one tells truth, one alternates. Who do you trust?', choices: ['The quiet one', 'The ally', 'The beast', 'Trust no one'], scores: [2, 4, 1, 3] },
-          { q: 'Nominee A has 3 allies, B has 1. Who is likelier evicted?', choices: ['A', 'B', 'Equal', 'Neither'], scores: [1, 4, 2, 3] }
-        ];
-        const puzzle = pickRandom(puzzles);
-        challengeData = this.competition.getPlayerChallengeData('logic', puzzle);
-        this.competitionData = puzzle;
-        break;
-      }
-      case 'endurance':
-        challengeData = this.competition.getPlayerChallengeData('endurance', 3);
-        this.competitionData = 3;
-        break;
-      default:
-        break;
-    }
-
+  _startPlayerCompetition(comp, challenge) {
+    const challengeData = this.competition.getPlayerChallengeData(challenge.type, challenge.data);
     if (!challengeData) {
       this._resolveCompetitionAI();
       return;
     }
 
-    let html = `<p>${challengeData.prompt}</p><div class="competition-choices">`;
+    let html = `<p>${escapeHtml(challengeData.prompt)}</p><div class="competition-choices">`;
     for (const choice of challengeData.choices) {
-      html += `<button class="btn btn-action competition-choice" data-value="${choice.value}">${choice.label}</button>`;
+      const value = typeof choice.value === 'string' ? choice.value : String(choice.value);
+      html += `<button class="btn btn-action competition-choice" data-value="${escapeHtml(value)}">${escapeHtml(choice.label)}</button>`;
     }
     html += '</div>';
 
@@ -365,37 +367,32 @@ class Game {
         const raw = btn.dataset.value;
         let value = raw;
         if (raw === 'true') value = true;
-        if (raw === 'false') value = false;
-        if (/^\d+$/.test(raw)) value = parseInt(raw, 10);
-        this._resolveCompetitionWithPlayerChoice(comp.id, value);
+        else if (raw === 'false') value = false;
+        else if (/^\d+$/.test(raw)) value = parseInt(raw, 10);
+        this._resolveCompetitionWithPlayerChoice(value);
       });
     });
   }
 
-  _resolveCompetitionWithPlayerChoice(compId, playerChoice) {
+  _resolveCompetitionWithPlayerChoice(playerChoice) {
     this.ui.hideActionDetail();
-
-    const playerChoiceFn = (type, data) => {
-      if (type === 'trivia') return playerChoice === data.answer;
-      if (type === 'memory') return playerChoice === data;
-      if (type === 'logic') return playerChoice;
-      if (type === 'endurance') return playerChoice === true;
-      return false;
-    };
-
-    const { winner, results } = this.competition.runCompetition(playerChoiceFn);
+    const challenge = this.pendingChallenge || this.competition.challengeData;
+    const { winner, results } = this.competition.runCompetition(challenge, playerChoice, true);
+    this.pendingChallenge = null;
     this.logAndRender(results);
     this._afterCompetition(winner);
   }
 
   _resolveCompetitionAI() {
-    const { winner, results } = this.competition.runCompetition();
+    const { winner, results } = this.competition.runCompetition(null, null, true);
+    this.pendingChallenge = null;
     this.logAndRender(results);
     this._afterCompetition(winner);
   }
 
   _afterCompetition(winner) {
     this.state.phase = PHASES.NOMINATION;
+    this.state.day = 7;
     this.render();
     setTimeout(() => this.runPhase(), 1000);
   }
@@ -411,7 +408,7 @@ class Game {
       return;
     }
 
-    const { results, nominees } = this.eviction.runNominations();
+    const { results } = this.eviction.runNominations();
     this.logAndRender(results);
     this.state.phase = PHASES.VETO;
     this.render();
@@ -427,7 +424,7 @@ class Game {
       let html = `<p>Select 2 nominees (${selected.length}/2):</p><div class="target-grid">`;
       for (const t of targets) {
         const isSelected = selected.includes(t.id);
-        html += `<button class="btn target-btn ${isSelected ? 'selected' : ''}" data-target="${t.id}">${t.name}</button>`;
+        html += `<button class="btn target-btn ${isSelected ? 'selected' : ''}" data-target="${t.id}">${escapeHtml(t.name)}</button>`;
       }
       html += `</div>`;
       if (selected.length === 2) {
@@ -468,9 +465,38 @@ class Game {
   // ─── Veto ──────────────────────────────────────────────────────────
 
   runVetoPhase() {
-    const player = this.state.getPlayer();
-    const result = this.eviction.runVetoEvent(false);
+    const { playerInComp } = this.eviction.getVetoSetup();
 
+    if (playerInComp && !this.state.getPlayer().evicted) {
+      this._showVetoCompetition();
+      return;
+    }
+
+    this._finishVetoPhase(false);
+  }
+
+  _showVetoCompetition() {
+    this.ui.setActionPrompt('Power of Veto — compete to save a nominee!');
+    const html = `<p>The veto competition is intense. Can you outlast the distractions?</p>
+      <div class="competition-choices">
+        <button class="btn btn-action competition-choice" data-value="true">Push through and win!</button>
+        <button class="btn btn-action competition-choice" data-value="false">Play it safe</button>
+      </div>`;
+    this.ui.showActionDetail(html);
+    this.ui.renderActions([], () => {});
+
+    this.ui.elements.actionDetail.querySelectorAll('.competition-choice').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const heldStrong = btn.dataset.value === 'true';
+        const won = this.competition.resolveVetoCompetition(heldStrong);
+        this.ui.hideActionDetail();
+        this._finishVetoPhase(won);
+      });
+    });
+  }
+
+  _finishVetoPhase(playerWonVeto) {
+    const result = this.eviction.runVetoEvent(playerWonVeto);
     this.logAndRender(result.results);
 
     if (result.needsPlayerInput && result.vetoWinner?.isPlayer) {
@@ -492,17 +518,17 @@ class Game {
     const nominees = this.state.nominees.map((id) => this.state.getContestant(id)).filter(Boolean);
     let html = '<p>You won the Veto! Use it?</p><div class="target-grid">';
     for (const n of nominees) {
-      html += `<button class="btn target-btn" data-veto-target="${n.id}">Save ${n.name}</button>`;
+      html += `<button class="btn target-btn" data-veto-target="${n.id}">Save ${escapeHtml(n.name)}</button>`;
     }
-    html += '<button class="btn btn-action" data-veto-skip>Don\'t use the Veto</button></div>';
+    html += '<button class="btn btn-action" data-veto-skip">Don\'t use the Veto</button></div>';
     this.ui.showActionDetail(html);
 
     this.ui.elements.actionDetail.querySelectorAll('[data-veto-target]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const result = this.eviction.playerUseVeto(vetoWinner, btn.dataset.vetoTarget, true);
+        const vetoResult = this.eviction.playerUseVeto(vetoWinner, btn.dataset.vetoTarget, true);
         this.ui.hideActionDetail();
-        this.logAndRender(result.results);
-        if (result.needsReplacementPick) {
+        this.logAndRender(vetoResult.results);
+        if (vetoResult.needsReplacementPick) {
           this._showReplacementPicker();
         } else {
           this.state.phase = PHASES.EVICTION;
@@ -514,9 +540,9 @@ class Game {
     const skip = this.ui.elements.actionDetail.querySelector('[data-veto-skip]');
     if (skip) {
       skip.addEventListener('click', () => {
-        const result = this.eviction.playerUseVeto(vetoWinner, null, false);
+        const vetoResult = this.eviction.playerUseVeto(vetoWinner, null, false);
         this.ui.hideActionDetail();
-        this.logAndRender(result.results);
+        this.logAndRender(vetoResult.results);
         this.state.phase = PHASES.EVICTION;
         setTimeout(() => this.runPhase(), 1000);
       });
@@ -530,7 +556,7 @@ class Game {
 
     let html = '<p>Pick a replacement nominee:</p><div class="target-grid">';
     for (const t of targets) {
-      html += `<button class="btn target-btn" data-replacement="${t.id}">${t.name}</button>`;
+      html += `<button class="btn target-btn" data-replacement="${t.id}">${escapeHtml(t.name)}</button>`;
     }
     html += '</div>';
     this.ui.showActionDetail(html);
@@ -551,7 +577,7 @@ class Game {
   runEvictionPhase() {
     const player = this.state.getPlayer();
 
-    if (!player.isNominated && !player.evicted) {
+    if (!player.isNominated && !player.isHOH && !player.evicted) {
       this._showEvictionVote();
       return;
     }
@@ -565,7 +591,7 @@ class Game {
     const nominees = this.state.nominees.map((id) => this.state.getContestant(id)).filter(Boolean);
     let html = '<p>Cast your vote to evict:</p><div class="target-grid">';
     for (const n of nominees) {
-      html += `<button class="btn target-btn btn-danger" data-evict="${n.id}">Evict ${n.name}</button>`;
+      html += `<button class="btn target-btn btn-danger" data-evict="${n.id}">Evict ${escapeHtml(n.name)}</button>`;
     }
     html += '</div>';
     this.ui.showActionDetail(html);
@@ -584,14 +610,15 @@ class Game {
 
   _afterEviction(evicted) {
     if (this.state.getPlayer().evicted) {
-      this.state.checkWinCondition();
-      if (!this.state.gameOver) {
+      const remaining = this.state.getActiveContestants().length;
+      if (remaining > 1) {
         this.logAndRender([{
           type: 'system',
           text: 'You may continue watching the house as a spectator...'
         }]);
         setTimeout(() => this._spectateRemaining(), 1500);
       } else {
+        this.state.checkWinCondition();
         this.endGame();
       }
       return;
@@ -618,6 +645,7 @@ class Game {
     }
 
     this.state.startNewWeek();
+    this.competition.currentCompetition = null;
     this.logAndRender([{
       type: 'success',
       text: `<strong>Week ${this.state.week}</strong> begins. The game is heating up.`
@@ -631,14 +659,22 @@ class Game {
 
   _spectateRemaining() {
     while (!this.state.gameOver) {
+      const activeCount = this.state.getActiveContestants().length;
+      if (activeCount <= 2) {
+        this.state.checkWinCondition(true);
+        break;
+      }
+
       this.state.startNewWeek();
+      this.competition.currentCompetition = null;
       this.state.phase = PHASES.COMPETITION;
+      this.state.day = 6;
 
       const { results } = this.competition.runCompetition();
-      this.state.storyLog.push(...results.map((r) => ({ ...r, week: this.state.week, day: 1, phase: PHASES.COMPETITION })));
+      this.state.storyLog.push(...results.map((r) => ({ ...r, week: this.state.week, day: 6, phase: PHASES.COMPETITION })));
 
       const nomResults = this.eviction.runNominations();
-      this.state.storyLog.push(...nomResults.results.map((r) => ({ ...r, week: this.state.week, day: 6, phase: PHASES.NOMINATION })));
+      this.state.storyLog.push(...nomResults.results.map((r) => ({ ...r, week: this.state.week, day: 7, phase: PHASES.NOMINATION })));
 
       const vetoResults = this.eviction.runVetoEvent(false);
       this.state.storyLog.push(...vetoResults.results.map((r) => ({ ...r, week: this.state.week, day: 7, phase: PHASES.VETO })));
@@ -646,7 +682,10 @@ class Game {
       const evictResults = this.eviction.runEvictionVote(null);
       this.state.storyLog.push(...evictResults.results.map((r) => ({ ...r, week: this.state.week, day: 7, phase: PHASES.EVICTION })));
 
-      if (this.state.checkWinCondition()) break;
+      if (this.state.getActiveContestants().length <= 2) {
+        this.state.checkWinCondition(true);
+        break;
+      }
     }
 
     this.render();
@@ -664,7 +703,6 @@ class Game {
   }
 }
 
-// Boot
 const game = new Game();
 
 export default game;

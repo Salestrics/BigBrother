@@ -17,7 +17,8 @@ export class Contestant {
     isPlayer = false,
     personality = null,
     stats = {},
-    difficultyBonus = 0
+    difficultyBonus = 0,
+    skipModifiers = false
   }) {
     this.id = id || uid('guest');
     this.name = name;
@@ -33,7 +34,9 @@ export class Contestant {
     this.competition = stats.competition ?? this._rollStat(4, 8, difficultyBonus);
     this.aggression = stats.aggression ?? this._rollStat(3, 7, difficultyBonus);
 
-    this._applyPersonalityModifiers();
+    if (!skipModifiers) {
+      this._applyPersonalityModifiers();
+    }
 
     // Game state
     this.relationships = {}; // id -> score (-100 to 100)
@@ -180,6 +183,7 @@ export class Contestant {
       name: data.name,
       isPlayer: data.isPlayer,
       personality: data.personality,
+      skipModifiers: true,
       stats: {
         loyalty: data.loyalty,
         intelligence: data.intelligence,
